@@ -1,9 +1,9 @@
-name = "worker-rust"
+name = "ticket-bench"
 main = "build/worker/shim.mjs"
 compatibility_date = "2023-03-22"
 
 kv_namespaces = [
-  { binding = "RADICAL_TICKET_KV", id = "373b8520dc6b42dbb4be2b7b929aa5cc" }
+  { binding = "RADICAL_TICKET_KV", id = "41c44dc703924117b484357282df1572" }
 ]
 
 [build]
