@@ -3,7 +3,8 @@ import time
 import pandas as pd
 
 # base url
-target = "http://localhost:8787"
+# target = "http://localhost:8787"
+target = "http://ticket-bench.sns-radical.workers.dev"
 
 # populate the kv with n tickets
 def populate_tickets(n):
@@ -16,6 +17,14 @@ def clear_kv():
   url = target + "/clear_kv"
   resp = requests.post(url)
   assert resp.status_code == 200
+  print(resp.content)
+
+def avail_tickets():
+  resp = requests.get(target)
+  if resp.status_code == 200: 
+    print(resp.content)
+  else:
+    print("avail_tickets error", resp.status_code)
 
 # reserve ticket i and return the time it took in ms
 def reserve_ticket(i):
@@ -31,7 +40,8 @@ def reserve_ticket(i):
   start = time.perf_counter()
   resp = requests.post(url, json=ticket_data)
   end = time.perf_counter()
-  assert resp.status_code == 200
+  if resp.status_code != 200:
+    print(f"reserve_ticket({i})", resp)
 
   # milliseconds
   return (end - start) * 1000
@@ -43,14 +53,17 @@ if __name__ == "__main__":
 
   results = pd.DataFrame(columns=[f"ticket{i}_ms" for i in range(n)])
 
-  for _ in range(trials):
-    clear_kv()
-    time.sleep(1)
-    populate_tickets(n)
-    time.sleep(1)
+  # use different tickets on each trial
+  clear_kv()
+  time.sleep(1)
+  populate_tickets(n * trials)
+  time.sleep(1)
+
+  for t in range(trials):
+    avail_tickets()
     trial_results = []
     for i in range(n):
-      trial_results.append(reserve_ticket(i))
+      trial_results.append(reserve_ticket(n*t + i))
     
     results.loc[len(results)] = trial_results
   
