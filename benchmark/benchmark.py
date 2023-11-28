@@ -1,10 +1,8 @@
 import requests
 import time
 import pandas as pd
+import argparse
 
-# base url
-# target = "http://localhost:8787"
-target = "http://ticket-bench.sns-radical.workers.dev"
 
 # populate the kv with n tickets
 def populate_tickets(n):
@@ -17,14 +15,22 @@ def clear_kv():
   url = target + "/clear_kv"
   resp = requests.post(url)
   assert resp.status_code == 200
-  print(resp.content)
+  print(resp.text)
 
+# list all available tickets
 def avail_tickets():
   resp = requests.get(target)
   if resp.status_code == 200: 
     print(resp.content)
   else:
     print("avail_tickets error", resp.status_code)
+
+# get ticket i
+def get_ticket(i):
+  url = target + f"/get_ticket/{i}"
+  resp = requests.get(url)
+  assert resp.status_code == 200
+  return resp.text
 
 # reserve ticket i and return the time it took in ms
 def reserve_ticket(i):
@@ -48,6 +54,22 @@ def reserve_ticket(i):
 
 
 if __name__ == "__main__":
+  # Parse in command-line arguments.
+  parser = argparse.ArgumentParser(
+      prog="ticket-benchmark",
+      description="Creates tickets and measures latency of reserving a ticket",
+  )
+  parser.add_argument("-d", "--dev", action="store_true", help="use the local dev server rather than the Cloudflare deployment")
+  args = parser.parse_args()
+
+  # Set target depending on dev vs. prod.
+  if args.dev:
+      target = "http://localhost:8787"
+      env_name = "local"
+  else:
+      target = "http://ticket-bench.sns-radical.workers.dev"
+      env_name = "edge"
+
   n = 10
   trials = 10
 
@@ -63,8 +85,9 @@ if __name__ == "__main__":
     avail_tickets()
     trial_results = []
     for i in range(n):
+      print(get_ticket(n*t + i))
       trial_results.append(reserve_ticket(n*t + i))
     
     results.loc[len(results)] = trial_results
   
-  results.to_csv(f"simple_{n}tickets_{trials}trials.csv")
+  results.to_csv(f"simple_{env_name}_{n}tickets_{trials}trials.csv")
