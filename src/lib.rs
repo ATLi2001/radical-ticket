@@ -73,6 +73,19 @@ async fn get_index(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
     Response::ok(avail_tickets)
 }
 
+// return a specific ticket
+async fn get_ticket(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    if let Some(ticket_id) = ctx.param("id") {
+        let kv = ctx.kv("RADICAL_TICKET_KV")?;
+        let key = format!("ticket-{ticket_id}");
+        let val: MyValue = kv.get(&key).json().await?.unwrap();
+        Response::from_json(&val.value)
+    } 
+    else {
+        Response::error("Bad request", 400)
+    }
+}
+
 // check if ticket reservation passes anti fraud test
 // true means reservation is ok, false means not
 fn anti_fraud(_ticket: &Ticket) -> bool {
@@ -126,6 +139,7 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     router
         .get("/hello", |_, _| Response::ok("Hello, World!"))
         .get_async("/", get_index)
+        .get_async("/get_ticket/:id", get_ticket)
         .post_async("/populate_tickets", populate_tickets)
         .post_async("/reserve", reserve_ticket)
         .post_async("/clear_kv", clear_kv)
