@@ -2,9 +2,13 @@ name = "ticket-bench"
 main = "build/worker/shim.mjs"
 compatibility_date = "2023-03-22"
 
-kv_namespaces = [
-  { binding = "RADICAL_TICKET_KV", id = "41c44dc703924117b484357282df1572" }
+routes = [
+  { pattern = "ticket-bench.radical-serverless.com", custom_domain = true } 
 ]
+
+# kv_namespaces = [
+#   { binding = "RADICAL_TICKET_KV", id = "41c44dc703924117b484357282df1572" }
+# ]
 
 [build]
 command = "cargo install -q worker-build && worker-build --release"

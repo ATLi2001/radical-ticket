@@ -74,7 +74,7 @@ if __name__ == "__main__":
       target = "http://localhost:8787"
       env_name = "local"
   else:
-      target = "http://ticket-bench.sns-radical.workers.dev"
+      target = "https://ticket-bench.radical-serverless.com"
       env_name = "edge"
 
   n = 10
@@ -84,18 +84,15 @@ if __name__ == "__main__":
 
   ticket_bench = TicketBenchmark(target)
 
-  # use different tickets on each trial
-  ticket_bench.clear_kv()
-  time.sleep(1)
-  ticket_bench.populate_tickets(n * trials)
-  time.sleep(1)
 
   for t in range(trials):
-    ticket_bench.avail_tickets()
+    ticket_bench.populate_tickets(n)
+    time.sleep(1)
+
     trial_results = []
     for i in range(n):
-      print(ticket_bench.get_ticket(n*t + i))
-      trial_results.append(ticket_bench.reserve_ticket(n*t + i))
+      print(ticket_bench.get_ticket(i))
+      trial_results.append(ticket_bench.reserve_ticket(i))
     
     results.loc[len(results)] = trial_results
   

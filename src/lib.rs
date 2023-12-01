@@ -17,17 +17,43 @@ pub struct MyValue {
     pub value: Ticket,
 }
 
+// helper function for cache read
+async fn cache_read(id: u32) -> Option<MyValue> {
+    let cache = Cache::default();
+    let cache_uri = format!("http://radicalcache/key/ticket-{id}");
+    let resp = cache.get(cache_uri, false).await.unwrap();
+    match resp {
+        Some(r) => {
+            // manually add application/json headers to get json() to work
+            let mut h = Headers::new();
+            h.append("Content-Type", "application/json").unwrap();
+            let mut r_json = r.with_headers(h);
+            Some(r_json.json::<MyValue>().await.unwrap())
+        }, 
+        None => None
+    }
+}
+
+// helper function for cache write
+async fn cache_write(id: u32, val: &MyValue) {
+    let cache = Cache::default();
+    let cache_uri = format!("http://radicalcache/key/ticket-{id}");
+    let mut cache_headers = Headers::new();
+    cache_headers.append("Cache-Control", "max-age=1000").unwrap();
+    cache_headers.append("Cache-Control", "public").unwrap();
+    let cache_resp = Response::from_json::<MyValue>(val).unwrap().with_headers(cache_headers);
+
+    cache.put(cache_uri, cache_resp).await.unwrap()
+}
+
 // create new tickets 
 // expected request body with number
-async fn populate_tickets(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let kv = ctx.kv("RADICAL_TICKET_KV")?;
-
+async fn populate_tickets(mut req: Request, _ctx: RouteContext<()>) -> Result<Response> {
     // extract request number
     let n = req.text().await?.parse::<u32>().unwrap();
 
     // create n tickets 
     for i in 0..n {
-        let key = format!("ticket-{i}");
         let ticket = Ticket { 
             id: i,
             taken: false,
@@ -40,46 +66,25 @@ async fn populate_tickets(mut req: Request, ctx: RouteContext<()>) -> Result<Res
             value: ticket,
         };
 
-        kv.put(&key, val)?.execute().await?;
+        cache_write(i, &val).await;
     }
 
     Response::ok("")
 }
 
-async fn clear_kv(_req:Request, ctx: RouteContext<()>) -> Result<Response> {
-    let kv = ctx.kv("RADICAL_TICKET_KV")?;
-    let keys = kv.list().execute().await?.keys;
-    for key in keys {
-        kv.delete(&key.name).await?;
-    }
-
-    Response::ok("Successfully cleared kv")
-}
-
-// return all available tickets (taken=false)
-async fn get_index(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let kv = ctx.kv("RADICAL_TICKET_KV")?;
-    let keys = kv.list().execute().await?.keys;
-
-    let mut avail_tickets = "".to_owned();
-    for key in keys {
-        let val: MyValue = kv.get(&key.name).json().await?.unwrap();
-        if !val.value.taken {
-            avail_tickets.push_str(&val.value.id.to_string());
-            avail_tickets.push_str("\n");
-        }
-    }
-
-    Response::ok(avail_tickets)
-}
-
 // return a specific ticket
 async fn get_ticket(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
     if let Some(ticket_id) = ctx.param("id") {
-        let kv = ctx.kv("RADICAL_TICKET_KV")?;
-        let key = format!("ticket-{ticket_id}");
-        let val: MyValue = kv.get(&key).json().await?.unwrap();
-        Response::from_json(&val.value)
+        let id = ticket_id.parse::<u32>().expect("ticket id should be a number");
+        let val = cache_read(id).await;
+        match val {
+            Some(v) => {
+                Response::from_json(&v.value)
+            },
+            None => {
+                Response::error("not found", 500)
+            }
+        }
     } 
     else {
         Response::error("Bad request", 400)
@@ -94,15 +99,17 @@ fn anti_fraud(_ticket: &Ticket) -> bool {
 
 // reserve a ticket
 // expect request as a json with form of Ticket
-async fn reserve_ticket(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let kv = ctx.kv("RADICAL_TICKET_KV")?;
-
+async fn reserve_ticket(mut req: Request, _ctx: RouteContext<()>) -> Result<Response> {
     let ticket = req.json::<Ticket>().await?;
     let ticket_id = ticket.id;
 
     // get old val to compute new version number
-    let key = format!("ticket-{ticket_id}");
-    let old_val: MyValue = kv.get(&key).json().await?.unwrap();
+    let val = cache_read(ticket_id).await;
+    if val.is_none() {
+        return Response::error("not found", 500);
+    }
+    
+    let old_val = val.unwrap();
     let new_version = old_val.version + 1;
     // check that the ticket is not already taken
     if old_val.value.taken {
@@ -127,8 +134,9 @@ async fn reserve_ticket(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
         version: new_version,
         value: new_ticket,
     };
-    // put back into kv
-    kv.put(&key, new_val)?.execute().await?;
+
+    // put back into cache
+    cache_write(ticket_id, &new_val).await;
 
     Response::ok("Success")
 }
@@ -138,11 +146,9 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     let router = Router::new();
     router
         .get("/hello", |_, _| Response::ok("Hello, World!"))
-        .get_async("/", get_index)
         .get_async("/get_ticket/:id", get_ticket)
         .post_async("/populate_tickets", populate_tickets)
         .post_async("/reserve", reserve_ticket)
-        .post_async("/clear_kv", clear_kv)
         .run(req, env)
         .await
 }
