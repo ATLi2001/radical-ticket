@@ -21,6 +21,14 @@ pub struct MyValue {
     pub value: Ticket,
 }
 
+type RWSet = Vec<String>;
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct RWSetResponse {
+    status: u16,
+    rw_set: RWSet,
+}
+
 // helper function for cache read
 async fn cache_read(id: u32) -> Option<MyValue> {
     let cache = Cache::default();
@@ -187,6 +195,19 @@ async fn reserve_ticket(mut req: Request, _ctx: RouteContext<()>) -> Result<Resp
     Response::ok("Success")
 }
 
+// extract the read write set from the request
+async fn get_rw_set(mut req: Request, _ctx: RouteContext<()>) -> Result<Response> {
+    let ticket = req.json::<Ticket>().await?;
+    let ticket_id = ticket.id;
+
+    let rw_set: RWSet = vec![format!("ticket-{ticket_id}")];
+    
+    Response::from_json(&RWSetResponse {
+        status: 200,
+        rw_set,
+    })
+}
+
 #[event(fetch)]
 async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     let router = Router::new();
@@ -195,6 +216,7 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get_async("/get_ticket/:id", get_ticket)
         .post_async("/populate_tickets", populate_tickets)
         .post_async("/reserve", reserve_ticket)
+        .get_async("/rw_set", get_rw_set)
         .run(req, env)
         .await
 }
