@@ -13,6 +13,11 @@ crate-type = ["cdylib"]
 [dependencies]
 worker = "0.0.15"
 serde = { version = "1.0", features = ["derive"] }
+regex = "1.10.2"
+rand_distr = "0.4.3"
+rand = "0.8.5"
+# https://docs.rs/getrandom/latest/getrandom/#webassembly-support
+getrandom = { version = "0.2", features = ["js"] }
 
 [profile.release]
 lto = true

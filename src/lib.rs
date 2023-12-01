@@ -1,5 +1,9 @@
+use std::vec;
+
 use worker::*;
 use serde::{Serialize, Deserialize};
+use regex::Regex;
+use rand_distr::{Normal, Distribution};
 
 #[derive(Serialize, Deserialize)]
 pub struct Ticket {
@@ -93,7 +97,49 @@ async fn get_ticket(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
 
 // check if ticket reservation passes anti fraud test
 // true means reservation is ok, false means not
-fn anti_fraud(_ticket: &Ticket) -> bool {
+fn anti_fraud(ticket: &Ticket) -> bool {
+    // valid email must have some valid characters before @, some after, a dot, then some more
+    const EMAIL_REGEX: &str = r"(^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$)";
+    let re = Regex::new(EMAIL_REGEX).unwrap();
+
+    if !re.is_match(&ticket.res_email.clone().unwrap()) {
+        return false;
+    }
+
+    // check "ml" model
+    // create a feature vector from the name, email, and card
+    let feature_str = [
+        ticket.res_name.clone().unwrap().as_bytes(), 
+        ticket.res_email.clone().unwrap().as_bytes(), 
+        ticket.res_card.clone().unwrap().as_bytes(),
+    ].concat();
+    // feature vector is normalized
+    let mut feature_vec = vec![0f32; feature_str.len()];
+    let mut feature_norm = 0.0;
+    for i in 0..feature_str.len() {
+        feature_norm += (feature_str[i] as f32).powi(2);
+    }
+    for i in 0..feature_vec.len() {
+        feature_vec[i] = (feature_str[i] as f32) / (feature_norm.sqrt());
+    }
+
+    let normal = Normal::new(0.0, 1.0).unwrap();
+    // create OUTPUT_LENGTH x feature_vec random matrix
+    const OUTPUT_LENGTH: usize = 128;
+    let mut normal_matrix = vec![vec![0f32; feature_vec.len()]; OUTPUT_LENGTH];
+    for i in 0..normal_matrix.len() {
+        for j in 0..normal_matrix[i].len() {
+            normal_matrix[i][j] = normal.sample(&mut rand::thread_rng());
+        }
+    }
+    // output = (normal_matrix)(feature_vec)
+    let mut output = vec![0f32; OUTPUT_LENGTH];
+    for i in 0..output.len() {
+        for j in 0..feature_vec.len() {
+            output[i] += normal_matrix[i][j] * feature_vec[j];
+        }
+    }
+
     true
 }
 

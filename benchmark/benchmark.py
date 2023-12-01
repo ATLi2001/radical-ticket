@@ -96,4 +96,4 @@ if __name__ == "__main__":
     
     results.loc[len(results)] = trial_results
   
-  results.to_csv(f"simple_{env_name}_{n}tickets_{trials}trials.csv")
+  results.to_csv(f"anti_fraud_{env_name}_{n}tickets_{trials}trials.csv")
