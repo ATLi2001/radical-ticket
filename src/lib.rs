@@ -1,5 +1,4 @@
 use std::vec;
-
 use worker::*;
 use serde::{Serialize, Deserialize};
 use regex::Regex;
@@ -58,9 +57,19 @@ async fn cache_write(id: u32, val: &MyValue) {
     cache.put(cache_uri, cache_resp).await.unwrap()
 }
 
+// helper function for cache delete
+async fn cache_delete(id: u32) -> bool {
+    let cache = Cache::default();
+    let cache_uri = format!("http://radicalcache/key/ticket-{id}");
+    match cache.delete(cache_uri, false).await.unwrap() {
+        CacheDeletionOutcome::Success => true,
+        CacheDeletionOutcome::ResponseNotFound => false,
+    }
+}
+
 // create new tickets 
 // expected request body with number
-async fn populate_tickets(mut req: Request, _ctx: RouteContext<()>) -> Result<Response> {
+async fn populate_tickets(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     // extract request number
     let n = req.text().await?.parse::<u32>().unwrap();
 
@@ -80,8 +89,25 @@ async fn populate_tickets(mut req: Request, _ctx: RouteContext<()>) -> Result<Re
 
         cache_write(i, &val).await;
     }
+    
+    // save in kv so we can know how much to clear later
+    let kv = ctx.kv("RADICAL_TICKET_KV")?;
+    kv.put("num-tickets", n)?.execute().await?;
 
     Response::ok("")
+}
+
+async fn clear_cache(_req:Request, ctx: RouteContext<()>) -> Result<Response> {
+    let kv = ctx.kv("RADICAL_TICKET_KV")?;
+    let n = kv.get("num-tickets").text().await?.unwrap().parse::<u32>().unwrap();
+
+    for i in 0..n {
+        if !cache_delete(i).await {
+            return Response::error(format!("unable to find ticket-{i}"), 500);
+        }
+    }
+
+    Response::ok("Successfully cleared cache")
 }
 
 // return a specific ticket
@@ -101,6 +127,40 @@ async fn get_ticket(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
     else {
         Response::error("Bad request", 400)
     }
+}
+
+// multiply an input vector by a random normal matrix, returning an output vector
+fn multiply_random_normal(input_vec: Vec<f32>, output_dim: usize, scale: f32) -> Vec<f32> {
+    let normal = Normal::new(0.0, scale).unwrap();
+
+    let mut normal_matrix = vec![vec![0f32; input_vec.len()]; output_dim];
+    for i in 0..normal_matrix.len() {
+        for j in 0..normal_matrix[i].len() {
+            normal_matrix[i][j] = normal.sample(&mut rand::thread_rng());
+        }
+    }
+
+    // output = (normal_matrix)(feature_vec)
+    let mut output = vec![0f32; output_dim];
+    for i in 0..output.len() {
+        for j in 0..input_vec.len() {
+            output[i] += normal_matrix[i][j] * input_vec[j];
+        }
+    }
+
+    output
+}
+
+// compute relu of input vector
+fn relu(input_vec: Vec<f32>) -> Vec<f32> {
+    let mut output = vec![0f32; input_vec.len()];
+    for i in 0..output.len() {
+        if input_vec[i] > 0.0 {
+            output[i] = input_vec[i];
+        }
+    }
+
+    output
 }
 
 // check if ticket reservation passes anti fraud test
@@ -131,21 +191,10 @@ fn anti_fraud(ticket: &Ticket) -> bool {
         feature_vec[i] = (feature_str[i] as f32) / (feature_norm.sqrt());
     }
 
-    let normal = Normal::new(0.0, 1.0).unwrap();
-    // create OUTPUT_LENGTH x feature_vec random matrix
-    const OUTPUT_LENGTH: usize = 128;
-    let mut normal_matrix = vec![vec![0f32; feature_vec.len()]; OUTPUT_LENGTH];
-    for i in 0..normal_matrix.len() {
-        for j in 0..normal_matrix[i].len() {
-            normal_matrix[i][j] = normal.sample(&mut rand::thread_rng());
-        }
-    }
-    // output = (normal_matrix)(feature_vec)
-    let mut output = vec![0f32; OUTPUT_LENGTH];
-    for i in 0..output.len() {
-        for j in 0..feature_vec.len() {
-            output[i] += normal_matrix[i][j] * feature_vec[j];
-        }
+    let model_depth = 50;
+    for i in 0..model_depth {
+        feature_vec = multiply_random_normal(feature_vec, 128, (i+1) as f32);
+        feature_vec = relu(feature_vec);
     }
 
     true
@@ -217,6 +266,7 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .post_async("/populate_tickets", populate_tickets)
         .post_async("/reserve", reserve_ticket)
         .get_async("/rw_set", get_rw_set)
+        .post_async("/clear_cache", clear_cache)
         .run(req, env)
         .await
 }

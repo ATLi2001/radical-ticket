@@ -11,15 +11,15 @@ class TicketBenchmark:
     # keep request session alive
     self.session = requests.Session()
   
-  # populate the kv with n tickets
+  # populate the cache with n tickets
   def populate_tickets(self, n) -> None:
     url = self.target + "/populate_tickets"
     resp = self.session.post(url, data=f"{n}")
     assert resp.status_code == 200
 
-  # clear the kv
-  def clear_kv(self) -> None:
-    url = target + "/clear_kv"
+  # clear the cache
+  def clear_cache(self) -> None:
+    url = target + "/clear_cache"
     resp = self.session.post(url)
     assert resp.status_code == 200
     print(resp.text)
@@ -95,5 +95,8 @@ if __name__ == "__main__":
       trial_results.append(ticket_bench.reserve_ticket(i))
     
     results.loc[len(results)] = trial_results
+
+    ticket_bench.clear_cache()
+    time.sleep(1)
   
   results.to_csv(f"anti_fraud_{env_name}_{n}tickets_{trials}trials.csv")
