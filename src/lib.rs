@@ -1,3 +1,7 @@
+mod cache;
+
+use cache::CacheKV;
+
 use std::vec;
 use worker::*;
 use serde::{Serialize, Deserialize};
@@ -28,50 +32,13 @@ pub struct RWSetResponse {
     rw_set: RWSet,
 }
 
-// helper function for cache read
-async fn cache_read(id: u32) -> Option<MyValue> {
-    let cache = Cache::default();
-    let cache_uri = format!("http://radicalcache/key/ticket-{id}");
-    let resp = cache.get(cache_uri, false).await.unwrap();
-    match resp {
-        Some(r) => {
-            // manually add application/json headers to get json() to work
-            let mut h = Headers::new();
-            h.append("Content-Type", "application/json").unwrap();
-            let mut r_json = r.with_headers(h);
-            Some(r_json.json::<MyValue>().await.unwrap())
-        }, 
-        None => None
-    }
-}
-
-// helper function for cache write
-async fn cache_write(id: u32, val: &MyValue) {
-    let cache = Cache::default();
-    let cache_uri = format!("http://radicalcache/key/ticket-{id}");
-    let mut cache_headers = Headers::new();
-    cache_headers.append("Cache-Control", "max-age=1000").unwrap();
-    cache_headers.append("Cache-Control", "public").unwrap();
-    let cache_resp = Response::from_json::<MyValue>(val).unwrap().with_headers(cache_headers);
-
-    cache.put(cache_uri, cache_resp).await.unwrap()
-}
-
-// helper function for cache delete
-async fn cache_delete(id: u32) -> bool {
-    let cache = Cache::default();
-    let cache_uri = format!("http://radicalcache/key/ticket-{id}");
-    match cache.delete(cache_uri, false).await.unwrap() {
-        CacheDeletionOutcome::Success => true,
-        CacheDeletionOutcome::ResponseNotFound => false,
-    }
-}
-
 // create new tickets 
 // expected request body with number
-async fn populate_tickets(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+async fn populate_tickets(mut req: Request, _ctx: RouteContext<()>) -> Result<Response> {
     // extract request number
     let n = req.text().await?.parse::<u32>().unwrap();
+
+    let cache = CacheKV::new();
 
     // create n tickets 
     for i in 0..n {
@@ -87,25 +54,28 @@ async fn populate_tickets(mut req: Request, ctx: RouteContext<()>) -> Result<Res
             value: ticket,
         };
 
-        cache_write(i, &val).await;
+        cache.put(&format!("ticket-{i}"), &val).await?;
     }
     
-    // save in kv so we can know how much to clear later
-    let kv = ctx.kv("RADICAL_TICKET_KV")?;
-    kv.put("num-tickets", n)?.execute().await?;
+    // save in cache so we can know how much to clear later
+    
+    cache.put("count", &n).await?;
 
     Response::ok("")
 }
 
-async fn clear_cache(_req:Request, ctx: RouteContext<()>) -> Result<Response> {
-    let kv = ctx.kv("RADICAL_TICKET_KV")?;
-    let n = kv.get("num-tickets").text().await?.unwrap().parse::<u32>().unwrap();
+// clear the entire cache of tickets
+async fn clear_cache(_req:Request, _ctx: RouteContext<()>) -> Result<Response> {
+    let cache = CacheKV::new();
+    // get count of how many tickets total
+    let n = cache.get("count").await?.unwrap().text().await?.parse::<u32>().unwrap();
 
     for i in 0..n {
-        if !cache_delete(i).await {
-            return Response::error(format!("unable to find ticket-{i}"), 500);
-        }
+        cache.delete(&format!("ticket-{i}")).await?;
     }
+
+    // reset count
+    cache.put("count", &0).await?;
 
     Response::ok("Successfully cleared cache")
 }
@@ -114,10 +84,11 @@ async fn clear_cache(_req:Request, ctx: RouteContext<()>) -> Result<Response> {
 async fn get_ticket(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
     if let Some(ticket_id) = ctx.param("id") {
         let id = ticket_id.parse::<u32>().expect("ticket id should be a number");
-        let val = cache_read(id).await;
-        match val {
-            Some(v) => {
-                Response::from_json(&v.value)
+        let cache = CacheKV::new();
+        match cache.get(&format!("ticket-{id}")).await? {
+            Some(mut resp) => {
+                let val = resp.json::<MyValue>().await?;
+                Response::from_json(&val.value)
             },
             None => {
                 Response::error("not found", 500)
@@ -140,7 +111,7 @@ fn multiply_random_normal(input_vec: Vec<f32>, output_dim: usize, scale: f32) ->
         }
     }
 
-    // output = (normal_matrix)(feature_vec)
+    // output = (normal_matrix)(input_vec)
     let mut output = vec![0f32; output_dim];
     for i in 0..output.len() {
         for j in 0..input_vec.len() {
@@ -206,13 +177,15 @@ async fn reserve_ticket(mut req: Request, _ctx: RouteContext<()>) -> Result<Resp
     let ticket = req.json::<Ticket>().await?;
     let ticket_id = ticket.id;
 
+    let cache = CacheKV::new();
+
     // get old val to compute new version number
-    let val = cache_read(ticket_id).await;
-    if val.is_none() {
+    let resp = cache.get(&format!("ticket-{ticket_id}")).await?;
+    if resp.is_none() {
         return Response::error("not found", 500);
     }
     
-    let old_val = val.unwrap();
+    let old_val = resp.unwrap().json::<MyValue>().await?;
     let new_version = old_val.version + 1;
     // check that the ticket is not already taken
     if old_val.value.taken {
@@ -239,7 +212,7 @@ async fn reserve_ticket(mut req: Request, _ctx: RouteContext<()>) -> Result<Resp
     };
 
     // put back into cache
-    cache_write(ticket_id, &new_val).await;
+    cache.put(&format!("ticket-{ticket_id}"), &new_val).await?;
 
     Response::ok("Success")
 }
