@@ -93,6 +93,7 @@ if __name__ == "__main__":
     for i in range(n):
       print(ticket_bench.get_ticket(i))
       trial_results.append(ticket_bench.reserve_ticket(i))
+      print(ticket_bench.get_ticket(i))
     
     results.loc[len(results)] = trial_results
 

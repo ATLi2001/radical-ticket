@@ -38,7 +38,7 @@ async fn populate_tickets(mut req: Request, _ctx: RouteContext<()>) -> Result<Re
     // extract request number
     let n = req.text().await?.parse::<u32>().unwrap();
 
-    let cache = CacheKV::new();
+    let cache = CacheKV::new().await;
 
     // create n tickets 
     for i in 0..n {
@@ -66,9 +66,9 @@ async fn populate_tickets(mut req: Request, _ctx: RouteContext<()>) -> Result<Re
 
 // clear the entire cache of tickets
 async fn clear_cache(_req:Request, _ctx: RouteContext<()>) -> Result<Response> {
-    let cache = CacheKV::new();
+    let cache = CacheKV::new().await;
     // get count of how many tickets total
-    let n = cache.get("count").await?.unwrap().text().await?.parse::<u32>().unwrap();
+    let n = cache.get::<u32>("count").await?.unwrap();
 
     for i in 0..n {
         cache.delete(&format!("ticket-{i}")).await?;
@@ -84,10 +84,9 @@ async fn clear_cache(_req:Request, _ctx: RouteContext<()>) -> Result<Response> {
 async fn get_ticket(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
     if let Some(ticket_id) = ctx.param("id") {
         let id = ticket_id.parse::<u32>().expect("ticket id should be a number");
-        let cache = CacheKV::new();
-        match cache.get(&format!("ticket-{id}")).await? {
-            Some(mut resp) => {
-                let val = resp.json::<MyValue>().await?;
+        let cache = CacheKV::new().await;
+        match cache.get::<MyValue>(&format!("ticket-{id}")).await? {
+            Some(val) => {
                 Response::from_json(&val.value)
             },
             None => {
@@ -177,15 +176,15 @@ async fn reserve_ticket(mut req: Request, _ctx: RouteContext<()>) -> Result<Resp
     let ticket = req.json::<Ticket>().await?;
     let ticket_id = ticket.id;
 
-    let cache = CacheKV::new();
+    let cache = CacheKV::new().await;
 
     // get old val to compute new version number
-    let resp = cache.get(&format!("ticket-{ticket_id}")).await?;
+    let resp = cache.get::<MyValue>(&format!("ticket-{ticket_id}")).await?;
     if resp.is_none() {
         return Response::error("not found", 500);
     }
     
-    let old_val = resp.unwrap().json::<MyValue>().await?;
+    let old_val = resp.unwrap();
     let new_version = old_val.version + 1;
     // check that the ticket is not already taken
     if old_val.value.taken {
